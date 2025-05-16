@@ -60,13 +60,14 @@ export default defineConfig({
         // NodeModulesPolyfillPlugin(), // Keep removed
       ],
     },
-    include: ["buffer"], // Explicitly include buffer
+    include: ["buffer", "@metaplex-foundation/umi-bundle-defaults"], // Explicitly include buffer and @metaplex-foundation/umi-bundle-defaults
   },
-  // build: { // Keep build section commented for now to isolate dev server issues
-  //   rollupOptions: {
-  //     plugins: [
-  //       // rollupNodePolyFill() // If you use this, ensure it's configured correctly
-  //     ]
-  //   }
-  // }
+  build: {
+    rollupOptions: {
+      external: ["@metaplex-foundation/umi-bundle-defaults"],
+      // plugins: [
+      //   // rollupNodePolyFill() // If you use this, ensure it's configured correctly
+      // ]
+    },
+  },
 });
