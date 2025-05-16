@@ -64,7 +64,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      external: ["@metaplex-foundation/umi-bundle-defaults"],
+      external: [], // Make sure @metaplex-foundation/umi-bundle-defaults is NOT listed here
       // plugins: [
       //   // rollupNodePolyFill() // If you use this, ensure it's configured correctly
       // ]
