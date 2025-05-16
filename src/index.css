@@ -1,0 +1,25 @@
+/* Minimal index.css for Chakra UI */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 
+  Chakra UI and the custom theme in App.jsx will handle:
+  - font-family
+  - line-height
+  - font-weight
+  - color-scheme
+  - default text and background colors
+  - link styling
+  - button styling
+  - h1 styling
+
+  Keeping only the most essential root and body resets.
+*/
