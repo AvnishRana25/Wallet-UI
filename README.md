@@ -25,18 +25,16 @@ This wallet allows users to connect their existing Solana wallets, track multipl
 
 ## Getting Started
 
-1.  **Clone the repository (if you haven't already).**
-2.  **Navigate to the `wallet-ui` directory:**
+1.  **Navigate to the `wallet-ui` directory (if you are in the project root):**
     ```bash
     cd wallet-ui
     ```
-3.  **Install dependencies:**
-    Make sure you have Node.js and npm installed. If you used `npm install react@18.2.0 react-dom@18.2.0` previously, ensure all other dependencies are also installed.
-    A general install command is usually sufficient:
+2.  **Install dependencies:**
+    Make sure you have Node.js and npm installed.
     ```bash
     npm install
     ```
-4.  **Run the development server:**
+3.  **Run the development server:**
     ```bash
     npm run dev
     ```
