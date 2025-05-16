@@ -22,7 +22,8 @@ import {
   ChakraProvider,
   Divider,
   Icon,
-  Tooltip,
+  Select,
+  CloseButton,
   Modal,
   ModalOverlay,
   ModalContent,
@@ -30,23 +31,22 @@ import {
   ModalFooter,
   ModalBody,
   ModalCloseButton,
-  Link,
+  useDisclosure,
   List,
   ListItem,
-  ListIcon,
+  Textarea,
+  FormHelperText,
 } from "@chakra-ui/react";
 import {
   CopyIcon,
   ArrowForwardIcon,
-  RepeatIcon,
-  QuestionOutlineIcon,
-  InfoIcon,
-  CheckCircleIcon,
   ArrowBackIcon,
+  CloseIcon,
+  CheckCircleIcon,
 } from "@chakra-ui/icons";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   createRpc,
   buildAndSignTx,
@@ -60,7 +60,14 @@ import { ComputeBudgetProgram, PublicKey } from "@solana/web3.js";
 // import solanaWebP from "./assets/solana.webp"; // Old logo
 import solanaSvg from "./assets/solana.svg"; // New Solana SVG logo
 
-// Custom theme
+// Metaplex Umi imports
+import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
+import {
+  fetchDigitalAsset,
+  mplTokenMetadata,
+} from "@metaplex-foundation/mpl-token-metadata";
+import { publicKey as umiPublicKey } from "@metaplex-foundation/umi";
+
 const theme = extendTheme({
   config: {
     initialColorMode: "dark",
@@ -89,12 +96,12 @@ const theme = extendTheme({
   styles: {
     global: (props) => ({
       body: {
-        bg: "#121212",
+        bg: "#121212", // Slightly less black for a softer feel
         color: "whiteAlpha.900",
         lineHeight: "1.6",
       },
       "*::placeholder": {
-        color: "whiteAlpha.600",
+        color: "whiteAlpha.700",
       },
     }),
   },
@@ -103,7 +110,8 @@ const theme = extendTheme({
       variants: {
         solid: (props) => ({
           bg: props.colorScheme === "brand" ? "brand.500" : undefined,
-          color: props.colorScheme === "brand" ? "#1A202C" : undefined,
+          color: props.colorScheme === "brand" ? "gray.800" : undefined, // Darker text on brand buttons
+          fontWeight: props.colorScheme === "brand" ? "semibold" : "medium",
           _hover: {
             bg: props.colorScheme === "brand" ? "brand.600" : undefined,
             transform:
@@ -113,25 +121,55 @@ const theme = extendTheme({
           transition:
             "transform 0.15s ease-out, background-color 0.15s ease-out, box-shadow 0.15s ease-out",
         }),
+        outline: (props) => ({
+          borderColor:
+            props.colorScheme === "brand" ? "brand.500" : "whiteAlpha.400",
+          color: props.colorScheme === "brand" ? "brand.400" : "whiteAlpha.800",
+          _hover: {
+            bg: props.colorScheme === "brand" ? "brand.500" : "whiteAlpha.200",
+            color:
+              props.colorScheme === "brand" ? "gray.800" : "whiteAlpha.900",
+          },
+        }),
       },
       defaultProps: {
         size: "md",
+        borderRadius: "lg", // Slightly more rounded buttons
       },
     },
     Input: {
       baseStyle: {
         field: {
-          borderColor: "whiteAlpha.300",
-          bg: "whiteAlpha.50",
+          borderColor: "whiteAlpha.400",
+          bg: "whiteAlpha.100",
           _hover: {
-            borderColor: "whiteAlpha.400",
+            borderColor: "whiteAlpha.500",
           },
           _focus: {
             borderColor: "brand.500",
             boxShadow: `0 0 0 1px #ffbf00`,
           },
           _placeholder: {
-            color: "gray.700",
+            // This targets the input field's placeholder specifically
+            color: "gray.500",
+          },
+        },
+      },
+      sizes: {
+        md: {
+          field: {
+            borderRadius: "lg", // Match button rounding
+          },
+          addon: {
+            borderRadius: "lg",
+          },
+        },
+        sm: {
+          field: {
+            borderRadius: "md", // Slightly less for sm inputs
+          },
+          addon: {
+            borderRadius: "md",
           },
         },
       },
@@ -176,453 +214,371 @@ const cardStyles = {
   width: "100%",
 };
 
-// Key for localStorage
-const LOCAL_STORAGE_TRACKED_MINTS = "zkWalletTrackedMints";
-
-const truncateAddress = (address, chars = 4) => {
-  if (!address) return "";
-  const len = address.length;
-  if (len <= chars * 2 + 3) return address;
-  return `${address.substring(0, chars)}...${address.substring(len - chars)}`;
-};
-
 function App() {
   const { publicKey, connected, signTransaction, disconnect } = useWallet();
   const { connection } = useConnection();
-  const toast = useToast();
-
   const [solBalance, setSolBalance] = useState(null);
-  const [currentMint, setCurrentMint] = useState("");
-  const [inputValueMint, setInputValueMint] = useState("");
+  const [compressedBalance, setCompressedBalance] = useState(null);
 
-  const [trackedMints, setTrackedMints] = useState(() => {
-    const savedMints = localStorage.getItem(LOCAL_STORAGE_TRACKED_MINTS);
-    return savedMints ? JSON.parse(savedMints) : [];
-  });
+  // Mint management state
+  const [mintInput, setMintInput] = useState(""); // For the input field
+  const [savedMints, setSavedMints] = useState([]); // Array of { address: string, name?: string }
+  const [selectedMint, setSelectedMint] = useState(""); // The currently active mint address
 
-  const [trackedMintsBalances, setTrackedMintsBalances] = useState({});
-
+  const [loading, setLoading] = useState(false);
+  const [isMetadataLoading, setIsMetadataLoading] = useState(false);
+  const [tokenMetadata, setTokenMetadata] = useState(null);
   const [sendLoading, setSendLoading] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [sendAmount, setSendAmount] = useState("");
-
-  const [isEducationModalOpen, setIsEducationModalOpen] = useState(false);
-
+  const toast = useToast();
   const brandColor = useColorModeValue("brand.500", "brand.400");
   const subtleText = useColorModeValue("gray.600", "gray.400");
   const cardBackgroundColor = useColorModeValue("whiteAlpha.50", "cardBg");
 
+  const {
+    isOpen: isInfoOpen,
+    onOpen: onInfoOpen,
+    onClose: onInfoClose,
+  } = useDisclosure();
+
   useEffect(() => {
-    localStorage.setItem(
-      LOCAL_STORAGE_TRACKED_MINTS,
-      JSON.stringify(trackedMints)
-    );
-    // Clean up balances for mints no longer tracked
-    setTrackedMintsBalances((prevBalances) => {
-      const newBalances = { ...prevBalances };
-      Object.keys(newBalances).forEach((mint) => {
-        if (!trackedMints.includes(mint)) {
-          delete newBalances[mint];
+    try {
+      const storedMints = localStorage.getItem("savedMints");
+      if (storedMints) {
+        const parsedMints = JSON.parse(storedMints);
+        setSavedMints(parsedMints);
+        if (parsedMints.length > 0 && !selectedMint) {
+          setSelectedMint(parsedMints[0].address); // Select the first mint by default if none is selected
         }
-      });
-      return newBalances;
-    });
-  }, [trackedMints]);
-
-  useEffect(() => {
-    if (!currentMint && trackedMints.length > 0) {
-      setCurrentMint(trackedMints[0]);
-    } else if (trackedMints.length === 0) {
-      setCurrentMint(""); // Clear currentMint if no tracked mints
+      }
+    } catch (error) {
+      console.error("Error loading saved mints from localStorage:", error);
+      // Optionally, clear corrupted data: localStorage.removeItem("savedMints");
     }
-  }, [trackedMints, currentMint]);
+  }, []); // Empty dependency array ensures this runs only once on mount
 
-  const getRpcClient = useCallback(() => {
+  // Save savedMints to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem("savedMints", JSON.stringify(savedMints));
+    } catch (error) {
+      console.error("Error saving mints to localStorage:", error);
+    }
+  }, [savedMints]);
+
+  const handleAddMint = () => {
+    if (!mintInput.trim()) {
+      toast({
+        title: "Mint address cannot be empty.",
+        status: "warning",
+        duration: 3000,
+      });
+      return;
+    }
+    try {
+      new PublicKey(mintInput.trim()); // Validate format
+    } catch (e) {
+      toast({
+        title: "Invalid mint address format.",
+        status: "error",
+        duration: 3000,
+      });
+      return;
+    }
+    if (savedMints.some((m) => m.address === mintInput.trim())) {
+      toast({
+        title: "Mint address already saved.",
+        status: "info",
+        duration: 3000,
+      });
+      return;
+    }
+    const newMint = { address: mintInput.trim() }; // Can add a name field later if desired
+    setSavedMints((prevMints) => [...prevMints, newMint]);
+    setSelectedMint(newMint.address); // Optionally select the newly added mint
+    setMintInput(""); // Clear input field
+    toast({ title: "Mint address added!", status: "success", duration: 2000 });
+  };
+
+  const handleRemoveMint = (addressToRemove) => {
+    setSavedMints((prevMints) =>
+      prevMints.filter((m) => m.address !== addressToRemove)
+    );
+    if (selectedMint === addressToRemove) {
+      setSelectedMint(
+        savedMints.length > 1
+          ? savedMints.find((m) => m.address !== addressToRemove).address
+          : ""
+      );
+      // If the removed mint was selected, select another one or clear selection
+      setCompressedBalance(null); // Clear data when selection changes
+      setTokenMetadata(null);
+    }
+    toast({ title: "Mint address removed.", status: "info", duration: 2000 });
+  };
+
+  const handleSelectMint = (addressToSelect) => {
+    if (addressToSelect && addressToSelect !== selectedMint) {
+      setSelectedMint(addressToSelect);
+      // Data fetching will be triggered by the "Check" button or automatically if desired
+      // For now, just update the selection. Clear old data.
+      setCompressedBalance(null);
+      setTokenMetadata(null);
+      setLoading(false); // Reset loading states
+      setIsMetadataLoading(false);
+      // Automatically fetch data for the newly selected mint if user prefers
+      // fetchTokenData(); // Uncomment this line to auto-fetch on select
+    }
+  };
+
+  const umi = useMemo(() => {
     if (!connection) return null;
-    return createRpc(connection.rpcEndpoint, "confirmed");
+    return createUmi(connection.rpcEndpoint).use(mplTokenMetadata());
   }, [connection]);
 
-  const refreshMintData = useCallback(
-    async (mintAddressToFetch) => {
-      if (!publicKey || typeof publicKey.toBase58 !== "function") {
-        const errorMsg =
-          "Wallet public key is invalid or not available for fetching data.";
-        console.error(
-          "refreshMintData:",
-          errorMsg,
-          "Mint:",
-          mintAddressToFetch,
-          "PublicKey:",
-          publicKey
-        );
-        toast({
-          title: `Cannot fetch data for ${truncateAddress(mintAddressToFetch)}`,
-          description: errorMsg,
-          status: "error",
-          duration: 5000,
-          isClosable: true,
-        });
-        setTrackedMintsBalances((prev) => ({
-          ...prev,
-          [mintAddressToFetch]: {
-            ...prev[mintAddressToFetch],
-            isLoading: false,
-            error: errorMsg,
-            balance: null,
-            metadata: null,
-          },
-        }));
-        return;
-      }
-
-      if (!mintAddressToFetch) {
-        console.error(
-          "refreshMintData: mintAddressToFetch is undefined or null"
-        );
-        return;
-      }
-
-      const rpc = getRpcClient();
-      if (!rpc) {
-        const errorMsg = "RPC client is not available.";
-        toast({
-          title: "Connection Error",
-          description: errorMsg,
-          status: "error",
-        });
-        setTrackedMintsBalances((prev) => ({
-          ...prev,
-          [mintAddressToFetch]: {
-            ...prev[mintAddressToFetch],
-            isLoading: false,
-            error: errorMsg,
-            balance: null,
-            metadata: null,
-          },
-        }));
-        return;
-      }
-
-      setTrackedMintsBalances((prev) => ({
-        ...prev,
-        [mintAddressToFetch]: {
-          ...prev[mintAddressToFetch],
-          isLoading: true,
-          error: null,
-        },
-      }));
-
-      try {
-        let balance = 0;
-        let metadata = null;
-        let fetchedAsNft = false;
-
-        // Try fetching as a specific NFT asset first
+  useEffect(() => {
+    const fetchBalance = async () => {
+      if (publicKey) {
         try {
-          const asset = await CompressedTokenProgram.getCompressedNftAsset(
-            rpc,
-            mintAddressToFetch
-          );
-          if (
-            asset &&
-            asset.compression.compressed &&
-            asset.ownership.owner === publicKey.toBase58()
-          ) {
-            balance = 1; // NFTs typically represent a balance of 1
-            metadata = {
-              name: asset.content?.metadata?.name,
-              symbol: asset.content?.metadata?.symbol,
-              uri: asset.content?.files?.[0]?.uri,
-            };
-            fetchedAsNft = true;
-          }
-        } catch (nftError) {
-          // It's okay if this fails, it might not be an asset ID or might be a fungible mint ID
-          // console.info(`Mint ${mintAddressToFetch} not fetched as specific NFT asset or not owned: ${nftError.message}`);
+          const bal = await connection.getBalance(publicKey);
+          setSolBalance(bal / 1e9);
+        } catch (e) {
+          toast({
+            title: "Error fetching SOL balance",
+            status: "error",
+            duration: 3000,
+            isClosable: true,
+          });
         }
+      } else {
+        setSolBalance(null);
+      }
+    };
+    fetchBalance();
+  }, [publicKey, connection, toast]);
 
-        // If not fetched as an NFT, or to get sum for a general mint ID
-        if (!fetchedAsNft) {
-          const accounts = await rpc.getCompressedTokenAccountsByOwner(
-            publicKey.toBase58(),
-            { mint: mintAddressToFetch }
-          );
+  const fetchTokenData = async () => {
+    if (!publicKey || !umi) {
+      setCompressedBalance(null);
+      setTokenMetadata(null);
+      console.log(
+        "fetchTokenData: Aborted due to missing publicKey or umi instance.",
+        { publicKey: !!publicKey, umi: !!umi }
+      );
+      return;
+    }
 
-          balance = accounts.items.reduce(
-            (acc, item) => acc + Number(item.amount),
-            0
+    if (!selectedMint) {
+      toast({
+        title: "No Mint Selected",
+        description: "Please select or add a token mint address.",
+        status: "warning",
+        duration: 4000,
+        isClosable: true,
+        position: "top-right",
+      });
+      setLoading(false);
+      setIsMetadataLoading(false);
+      return;
+    }
+
+    try {
+      new PublicKey(selectedMint);
+      console.log(
+        "fetchTokenData: Selected mint string (",
+        selectedMint,
+        ") appears to be a valid PublicKey format."
+      );
+    } catch (e) {
+      console.error(
+        "fetchTokenData: Invalid selected mint address:",
+        selectedMint,
+        e
+      );
+      toast({
+        title: "Invalid Mint Address Selected",
+        description: `The address "${selectedMint.slice(
+          0,
+          20
+        )}..." is not valid. Please remove it or select a valid one.`,
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+        position: "top-right",
+      });
+      setLoading(false);
+      setIsMetadataLoading(false);
+      setCompressedBalance(null);
+      setTokenMetadata(null);
+      return;
+    }
+
+    console.log("fetchTokenData: Starting after mint validation", {
+      publicKey: publicKey?.toBase58(),
+      mint: selectedMint,
+      umiConnected: !!umi,
+      rpcEndpoint: connection.rpcEndpoint,
+    });
+    setLoading(true);
+    setIsMetadataLoading(true);
+    setCompressedBalance(null);
+    setTokenMetadata(null);
+
+    try {
+      console.log("fetchTokenData: Attempting to fetch compressed balance...");
+      const rpc = createRpc(connection.rpcEndpoint);
+      const accounts = await rpc.getCompressedTokenAccountsByOwner(
+        publicKey.toBase58(),
+        { mint: selectedMint }
+      );
+      console.log("fetchTokenData: Compressed balance fetched", accounts);
+      const total = accounts.items.reduce(
+        (acc, item) => acc + Number(item.amount),
+        0
+      );
+      setCompressedBalance(total);
+      setLoading(false); // Balance fetching part done
+
+      console.log("fetchTokenData: Attempting to fetch token metadata...");
+      try {
+        const mintPublicKeyForUmi = umiPublicKey(selectedMint);
+        console.log(
+          "fetchTokenData: Umi mint public key created",
+          mintPublicKeyForUmi.toString()
+        );
+        const asset = await fetchDigitalAsset(umi, mintPublicKeyForUmi);
+        console.log("fetchTokenData: Digital asset fetched", asset);
+
+        let offChainMetadata = {};
+        if (asset.metadata.uri) {
+          console.log(
+            "fetchTokenData: Fetching off-chain metadata from URI:",
+            asset.metadata.uri
           );
-          // Try to get some metadata if available (e.g., from the first account if it has some)
-          // This is a simplification; proper metadata for fungible tokens often comes from off-chain registries or token-list standards
-          if (accounts.items.length > 0) {
-            const firstItem = accounts.items[0];
-            // Example: if Light Protocol includes some metadata directly on the account (hypothetical)
-            // Or if the mint matches a known token with metadata. For now, this is basic.
-            if (firstItem.metadata?.name || firstItem.metadata?.symbol) {
-              metadata = {
-                name: firstItem.metadata.name,
-                symbol: firstItem.metadata.symbol,
-              };
+          try {
+            const response = await fetch(asset.metadata.uri);
+            if (!response.ok) {
+              console.warn(
+                `fetchTokenData: Failed to fetch URI ${asset.metadata.uri}: ${response.statusText} (status ${response.status})`
+              );
+            } else {
+              offChainMetadata = await response.json();
+              console.log(
+                "fetchTokenData: Off-chain metadata fetched",
+                offChainMetadata
+              );
             }
+          } catch (uriError) {
+            console.warn(
+              "fetchTokenData: Error fetching or parsing off-chain metadata URI:",
+              uriError
+            );
+            // Proceed with on-chain metadata even if off-chain fails
           }
+        } else {
+          console.log("fetchTokenData: No off-chain URI present in metadata.");
         }
 
-        setTrackedMintsBalances((prev) => ({
-          ...prev,
-          [mintAddressToFetch]: {
-            balance,
-            metadata,
-            isLoading: false,
-            error: null,
-          },
-        }));
-      } catch (error) {
-        console.error(`Error fetching data for ${mintAddressToFetch}:`, error);
-        const errorMessage = error.message || "Unknown error during fetch.";
+        const metadataToSet = {
+          name: asset.metadata.name,
+          symbol: asset.metadata.symbol,
+          uri: asset.metadata.uri,
+          image: offChainMetadata.image, // From off-chain JSON
+          description: offChainMetadata.description, // From off-chain JSON
+        };
+        console.log(
+          "fetchTokenData: Preparing to set token metadata",
+          metadataToSet
+        );
+        setTokenMetadata(metadataToSet);
+        console.log("fetchTokenData: Token metadata set.");
+      } catch (metaError) {
+        console.error(
+          "fetchTokenData: Error in Umi metadata fetching/processing part:",
+          metaError
+        );
+        setTokenMetadata(null); // Clear or set to a specific error state if needed
         toast({
-          title: `Error fetching data for ${truncateAddress(
-            mintAddressToFetch
-          )}`,
-          description: truncateAddress(errorMessage, 100),
-          status: "error",
+          title: "Metadata Not Found",
+          description:
+            metaError.message ||
+            "Could not fetch metadata for this mint. It might be a new or non-standard token.",
+          status: "warning",
           duration: 4000,
           isClosable: true,
         });
-        setTrackedMintsBalances((prev) => ({
-          ...prev,
-          [mintAddressToFetch]: {
-            ...prev[mintAddressToFetch],
-            balance: null,
-            metadata: null,
-            isLoading: false,
-            error: errorMessage,
-          },
-        }));
       }
-    },
-    [publicKey, getRpcClient, toast]
-  );
-
-  useEffect(() => {
-    if (
-      publicKey &&
-      typeof publicKey.toBase58 === "function" &&
-      trackedMints.length > 0
-    ) {
-      trackedMints.forEach((mint) => {
-        if (!mint) return;
-        const mintEntry = trackedMintsBalances[mint];
-
-        if (mintEntry?.isLoading) {
-          return;
-        }
-
-        if (!mintEntry || (!mintEntry.balance && !mintEntry.metadata)) {
-          refreshMintData(mint);
-        }
-      });
-    } else if (!publicKey || typeof publicKey.toBase58 !== "function") {
-      // If publicKey becomes invalid after being valid, we might want to clear/reset states
-      // For now, this useEffect just won't run the fetches.
-      // Consider clearing all mint balances if wallet disconnects or pk becomes invalid
-      // setTrackedMintsBalances({}); // Example: clear all balances
-    }
-  }, [publicKey, trackedMints, refreshMintData]);
-
-  const handleAddOrCheckMint = () => {
-    if (!inputValueMint) {
-      toast({
-        title: "Please enter a mint address",
-        status: "warning",
-        duration: 3000,
-      });
-      return;
-    }
-    try {
-      new PublicKey(inputValueMint); // Validate if it's a PublicKey string
     } catch (e) {
+      console.error(
+        "fetchTokenData: Error in outer try block (likely Light Protocol or unhandled Umi issue):",
+        e
+      );
       toast({
-        title: "Invalid mint address",
-        description: "Please enter a valid Solana public key.",
+        title: "Error Fetching Token Data",
+        description: e.message,
         status: "error",
-        duration: 3000,
+        duration: 5000,
+        isClosable: true,
       });
-      return;
+      setCompressedBalance(null);
+      setTokenMetadata(null);
+      setLoading(false); // Ensure loading is false on error
     }
-
-    setCurrentMint(inputValueMint);
-    if (!trackedMints.includes(inputValueMint)) {
-      setTrackedMints((prevMints) => [...prevMints, inputValueMint]);
-    }
-    refreshMintData(inputValueMint);
+    setIsMetadataLoading(false);
+    console.log("fetchTokenData: Finished.");
+    // setLoading is handled for balance, metadata has its own loader
   };
 
-  const handleSelectTrackedMint = (mintToSelect) => {
-    setCurrentMint(mintToSelect);
-    setInputValueMint(mintToSelect);
-    // Optionally refresh data on select if it's stale
-    // const mintData = trackedMintsBalances[mintToSelect];
-    // if (!mintData || (!mintData.isLoading && !mintData.balance && !mintData.error)) {
-    // refreshMintData(mintToSelect);
-    // }
-  };
-
-  const handleRemoveTrackedMint = (mintToRemove) => {
-    setTrackedMints((prevMints) => prevMints.filter((m) => m !== mintToRemove));
-    if (currentMint === mintToRemove) {
-      const remainingMints = trackedMints.filter((m) => m !== mintToRemove);
-      const newCurrentMint = remainingMints.length > 0 ? remainingMints[0] : "";
-      setCurrentMint(newCurrentMint);
-      setInputValueMint(newCurrentMint);
-    }
-  };
-
-  const fetchSolBalance = useCallback(async () => {
-    if (publicKey && connection) {
-      try {
-        const bal = await connection.getBalance(publicKey);
-        setSolBalance(bal / 1e9);
-      } catch (e) {
-        toast({
-          title: "Error fetching SOL balance",
-          status: "error",
-          duration: 3000,
-          isClosable: true,
-        });
-        setSolBalance(null);
-      }
-    } else {
-      setSolBalance(null);
-    }
-  }, [publicKey, connection, toast]);
-
-  useEffect(() => {
-    fetchSolBalance();
-  }, [fetchSolBalance]);
-
+  // Send compressed tokens
   const handleSend = async () => {
-    const currentMintData = currentMint
-      ? trackedMintsBalances[currentMint]
-      : null;
-    if (
-      !publicKey ||
-      !currentMint ||
-      !recipient ||
-      !sendAmount ||
-      !currentMintData ||
-      typeof currentMintData.balance !== "number" ||
-      currentMintData.balance <= 0
-    ) {
-      toast({
-        title: "Send requirements not met.",
-        description: "Check mint, recipient, amount, and balance.",
-        status: "warning",
-        duration: 3000,
-      });
-      return;
-    }
-    if (Number(sendAmount) <= 0) {
-      toast({
-        title: "Invalid Amount",
-        description: "Send amount must be greater than zero.",
-        status: "error",
-        duration: 3000,
-      });
-      return;
-    }
-    if (Number(sendAmount) > currentMintData.balance) {
-      toast({
-        title: "Insufficient Balance",
-        description: "Send amount exceeds your current balance for this token.",
-        status: "error",
-        duration: 3000,
-      });
-      return;
-    }
-    try {
-      new PublicKey(recipient); // Validate recipient
-    } catch (e) {
-      toast({
-        title: "Invalid Recipient Address",
-        status: "error",
-        duration: 3000,
-      });
-      return;
-    }
-
+    if (!publicKey || !selectedMint || !recipient || !sendAmount) return;
     setSendLoading(true);
-    const rpc = getRpcClient();
-    if (!rpc) {
-      toast({
-        title: "RPC client not available",
-        status: "error",
-        duration: 3000,
-      });
-      setSendLoading(false);
-      return;
-    }
-
     try {
+      const RPC_ENDPOINT = connection.rpcEndpoint;
+      const rpc = createRpc(RPC_ENDPOINT);
       const accounts = await rpc.getCompressedTokenAccountsByOwner(
         publicKey.toBase58(),
-        { mint: currentMint }
+        { mint: selectedMint }
       );
-
-      if (!accounts || accounts.items.length === 0) {
-        throw new Error("No token accounts found for sending.");
-      }
-
-      // For NFTs, amount is usually 1 unit. For fungible, it's the actual amount.
-      // Light Protocol's selectMinCompressedTokenAccountsForTransfer expects amount in base units.
-      // We assume sendAmount is in human-readable units. If tokens have decimals, this needs adjustment.
-      // For simplicity, assume no decimals or amount is already in base units.
-      const amountToSend = BigInt(sendAmount); //This might need adjustment if token has decimals
-
       const [inputAccounts] = selectMinCompressedTokenAccountsForTransfer(
         accounts.items,
-        amountToSend
+        BigInt(sendAmount)
       );
-
       const proof = await rpc.getValidityProof(
         inputAccounts.map((account) => account.compressedAccount.hash)
       );
-      const tokenPoolInfos = await rpc.getTokenPoolInfos(currentMint);
-
+      const tokenPoolInfos = await rpc.getTokenPoolInfos(selectedMint);
       const ix = await CompressedTokenProgram.transfer({
         payer: publicKey,
         owner: publicKey,
         inputCompressedTokenAccounts: inputAccounts,
         toAddress: recipient,
-        amount: amountToSend,
+        amount: BigInt(sendAmount),
         tokenPoolInfos,
         recentInputStateRootIndices: proof.rootIndices,
         recentValidityProof: proof.compressedProof,
       });
-
       const { blockhash } = await connection.getLatestBlockhash();
       const tx = buildAndSignTx(
         [ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }), ix],
         publicKey,
         blockhash,
-        [] // No signers needed beyond the wallet if payer is owner
+        []
       );
-
       const signedTx = await signTransaction(tx);
       const sig = await sendAndConfirmTx(connection, signedTx);
-
       toast({
         title: "Transfer Successful!",
-        description: `Signature: ${truncateAddress(sig, 8)}`,
+        description: `Signature: ${sig.substring(0, 20)}...`,
         status: "success",
         duration: 7000,
         isClosable: true,
         position: "top-right",
       });
-
       setSendAmount("");
       setRecipient("");
-      refreshMintData(currentMint); // Refresh balance of the sent token
-      fetchSolBalance(); // Refresh SOL balance as TX cost SOL
+      fetchTokenData();
     } catch (e) {
       toast({
         title: "Transfer Failed",
@@ -636,735 +592,18 @@ function App() {
     setSendLoading(false);
   };
 
+  // Copy wallet address
   const handleCopy = async (textToCopy, title) => {
     if (textToCopy) {
-      try {
-        await navigator.clipboard.writeText(textToCopy);
-        toast({
-          title: title || "Copied to clipboard!",
-          status: "info",
-          duration: 2000,
-          isClosable: true,
-        });
-      } catch (err) {
-        toast({
-          title: "Failed to copy",
-          status: "error",
-          duration: 2000,
-          isClosable: true,
-        });
-      }
+      await navigator.clipboard.writeText(textToCopy);
+      toast({
+        title: title || "Copied to clipboard!",
+        status: "info",
+        duration: 2000,
+        isClosable: true,
+      });
     }
   };
-
-  // Helper to display current mint (can be enhanced)
-  const displayCurrentMint = currentMint
-    ? truncateAddress(currentMint, 6)
-    : "None";
-  const currentMintData = currentMint
-    ? trackedMintsBalances[currentMint]
-    : null;
-  const isLoadingCurrentMint = !!currentMintData?.isLoading;
-  const currentMintError = currentMintData?.error;
-  const currentMintBalanceDetails =
-    !isLoadingCurrentMint && !currentMintError && currentMintData
-      ? currentMintData
-      : null;
-
-  // Landing Page Content
-  const landingPageContent = (
-    <Container
-      maxW={{ base: "container.sm", md: "container.md" }}
-      textAlign="center"
-    >
-      <VStack spacing={{ base: 6, md: 8 }} width="100%">
-        <Image
-          src={solanaSvg}
-          alt="Solana SVG Logo"
-          boxSize={{ base: "100px", md: "120px" }}
-          opacity={0.9}
-          mb={4}
-        />
-        <Heading
-          as="h2"
-          fontSize={{ base: "2xl", sm: "3xl", md: "4xl" }}
-          fontWeight="extrabold"
-          lineHeight="1.2"
-        >
-          Secure & Efficient Solana
-          <br />
-          <Text as="span" color={brandColor}>
-            Compressed Token Management
-          </Text>
-        </Heading>
-        <Text fontSize={{ base: "md", md: "lg" }} color={subtleText} maxW="lg">
-          Leverage the power of ZK-compression. Connect your wallet to
-          experience seamless and cost-effective token operations on Solana.
-        </Text>
-        <Box pt={4}>
-          <Text fontSize="sm" color="gray.500">
-            Please connect your wallet using the button in the header.
-          </Text>
-        </Box>
-        <Text fontSize="xs" color="gray.600" pt={8}>
-          Powered by Light Protocol technology.
-        </Text>
-      </VStack>
-    </Container>
-  );
-
-  // Dashboard Content
-  const dashboardContent = (
-    <Container maxW="container.lg" width="100%">
-      <VStack spacing={{ base: 6, md: 7 }} align="stretch" width="100%">
-        {/* Wallet and Mint Management Section */}
-        <Box sx={cardStyles} bg={cardBackgroundColor}>
-          <VStack spacing={4} align="stretch">
-            {/* Connected Wallet Info & SOL Balance */}
-            <Flex justifyContent="space-between" alignItems="center">
-              <HStack>
-                <Tag size="sm" colorScheme="green" variant="solid">
-                  Connected
-                </Tag>
-                <Tooltip
-                  label={publicKey?.toBase58()}
-                  placement="top"
-                  gutter={4}
-                >
-                  <Text fontWeight="medium" fontSize="sm" cursor="default">
-                    {truncateAddress(publicKey?.toBase58(), 6)}
-                  </Text>
-                </Tooltip>
-                <IconButton
-                  icon={<CopyIcon />}
-                  size="xs"
-                  aria-label="Copy Address"
-                  onClick={() =>
-                    handleCopy(publicKey?.toBase58(), "Wallet address copied!")
-                  }
-                  variant="ghost"
-                />
-              </HStack>
-              <Tag
-                size="md"
-                colorScheme="brand"
-                variant="outline"
-                fontWeight="bold"
-              >
-                {solBalance !== null ? (
-                  `${solBalance.toFixed(4)} SOL`
-                ) : (
-                  <Spinner size="xs" />
-                )}
-              </Tag>
-            </Flex>
-            <Divider borderColor="whiteAlpha.200" />
-
-            {/* Track New or Check Mint Input */}
-            <FormControl>
-              <FormLabel
-                htmlFor="mintInput"
-                fontWeight="medium"
-                fontSize="sm"
-                mb={1}
-              >
-                Track New or Check Mint Address
-              </FormLabel>
-              <InputGroup size="sm">
-                <Input
-                  id="mintInput"
-                  placeholder="Enter mint or asset ID to track/check"
-                  value={inputValueMint}
-                  onChange={(e) => setInputValueMint(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter") handleAddOrCheckMint();
-                  }}
-                />
-                <InputRightElement width="auto" px={1}>
-                  <Button
-                    h="1.75rem"
-                    size="sm"
-                    variant="outline"
-                    colorScheme="gray"
-                    onClick={handleAddOrCheckMint}
-                    isLoading={
-                      trackedMintsBalances[inputValueMint]?.isLoading &&
-                      currentMint === inputValueMint
-                    }
-                  >
-                    {trackedMints.includes(inputValueMint)
-                      ? "Refresh"
-                      : "Add/Check"}
-                  </Button>
-                </InputRightElement>
-              </InputGroup>
-            </FormControl>
-
-            {/* Tracked Mints List */}
-            {trackedMints.length > 0 && (
-              <Box pt={3}>
-                <Heading size="xs" mb={2} color="whiteAlpha.700">
-                  Tracked Tokens:
-                </Heading>
-                <VStack
-                  spacing={2}
-                  align="stretch"
-                  maxHeight="180px"
-                  overflowY="auto"
-                  pr={2}
-                  css={{
-                    "&::-webkit-scrollbar": { width: "6px" },
-                    "&::-webkit-scrollbar-track": {
-                      background: "rgba(255,255,255,0.05)",
-                    },
-                    "&::-webkit-scrollbar-thumb": {
-                      background: "rgba(255,255,255,0.2)",
-                      borderRadius: "3px",
-                    },
-                    "&::-webkit-scrollbar-thumb:hover": {
-                      background: "rgba(255,255,255,0.3)",
-                    },
-                  }}
-                >
-                  {trackedMints.map((m) => {
-                    const mintData = trackedMintsBalances[m];
-                    const isCurrent = currentMint === m;
-                    return (
-                      <Flex
-                        key={m}
-                        justify="space-between"
-                        align="center"
-                        p={2.5} // Increased padding
-                        bg={isCurrent ? "brand.900" : "blackAlpha.300"}
-                        borderRadius="md"
-                        cursor="pointer"
-                        onClick={() => handleSelectTrackedMint(m)}
-                        _hover={{
-                          bg: isCurrent ? "brand.800" : "blackAlpha.400",
-                        }}
-                        boxShadow={
-                          isCurrent
-                            ? "0 0 0 1px var(--chakra-colors-brand-500)"
-                            : "none"
-                        } // Highlight current
-                        transition="background-color 0.2s ease-out, box-shadow 0.2s ease-out"
-                      >
-                        <VStack
-                          align="start"
-                          spacing={0}
-                          flexGrow={1}
-                          mr={2}
-                          overflow="hidden"
-                        >
-                          <Tooltip label={m} placement="top-start" gutter={2}>
-                            <Text
-                              fontSize="xs"
-                              noOfLines={1}
-                              wordBreak="break-all"
-                              fontWeight={isCurrent ? "bold" : "normal"}
-                            >
-                              {truncateAddress(m, 8)}
-                            </Text>
-                          </Tooltip>
-                          {mintData &&
-                            !mintData.isLoading &&
-                            !mintData.error &&
-                            typeof mintData.balance === "number" && (
-                              <Text
-                                fontSize="xx-small"
-                                color="gray.400"
-                                noOfLines={1}
-                              >
-                                {mintData.balance}
-                                {mintData.metadata?.symbol
-                                  ? ` ${mintData.metadata.symbol}`
-                                  : ""}
-                                {mintData.metadata?.name
-                                  ? ` (${truncateAddress(
-                                      mintData.metadata.name,
-                                      15
-                                    )})`
-                                  : ""}
-                              </Text>
-                            )}
-                          {mintData && mintData.error && (
-                            <Text fontSize="xx-small" color="red.400">
-                              Error fetching
-                            </Text>
-                          )}
-                        </VStack>
-                        <HStack spacing={1}>
-                          {mintData?.isLoading && <Spinner size="xs" />}
-                          {!mintData?.isLoading && (
-                            <IconButton
-                              icon={<RepeatIcon />}
-                              size="xs"
-                              variant="ghost"
-                              aria-label="Refresh balance"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                refreshMintData(m);
-                              }}
-                            />
-                          )}
-                          <IconButton
-                            icon={<CopyIcon />}
-                            size="xs"
-                            variant="ghost"
-                            aria-label="Copy mint address"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleCopy(m, "Mint address copied!");
-                            }}
-                          />
-                          <IconButton
-                            icon={
-                              <ArrowForwardIcon transform="rotate(45deg)" />
-                            }
-                            colorScheme="red"
-                            size="xs"
-                            variant="ghost"
-                            aria-label="Remove tracked mint"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveTrackedMint(m);
-                            }}
-                          />
-                        </HStack>
-                      </Flex>
-                    );
-                  })}
-                </VStack>
-              </Box>
-            )}
-            <Divider
-              borderColor="whiteAlpha.200"
-              mt={trackedMints.length > 0 ? 2 : 0}
-            />
-          </VStack>
-        </Box>
-
-        {/* Current (Selected) Token Details, Receive & Send Section */}
-        {publicKey &&
-          currentMint && ( // Only show if a mint is selected
-            <Box sx={cardStyles} bg={cardBackgroundColor}>
-              <VStack spacing={3} align="stretch" w="100%">
-                <HStack justifyContent="space-between" alignItems="center">
-                  <Heading
-                    as="h3"
-                    size="sm"
-                    color="whiteAlpha.900"
-                    noOfLines={1}
-                    title={currentMint}
-                  >
-                    Selected: {displayCurrentMint}
-                  </Heading>
-                  {isLoadingCurrentMint && (
-                    <Spinner size="sm" color={brandColor} />
-                  )}
-                </HStack>
-                <Divider borderColor="whiteAlpha.200" />
-
-                {currentMintBalanceDetails &&
-                  typeof currentMintBalanceDetails.balance === "number" && (
-                    <Flex justifyContent="space-between" alignItems="center">
-                      <VStack align="start" spacing={0}>
-                        <Text fontWeight="medium" fontSize="sm">
-                          Balance:
-                        </Text>
-                        {currentMintBalanceDetails.metadata?.name && (
-                          <Tooltip
-                            label={currentMintBalanceDetails.metadata.name}
-                            placement="top-start"
-                            gutter={2}
-                          >
-                            <Text
-                              fontSize="xs"
-                              color="gray.400"
-                              noOfLines={1}
-                              title={currentMintBalanceDetails.metadata.name}
-                            >
-                              {truncateAddress(
-                                currentMintBalanceDetails.metadata.name,
-                                20
-                              )}
-                            </Text>
-                          </Tooltip>
-                        )}
-                      </VStack>
-                      <Text fontSize="lg" fontWeight="bold" color={brandColor}>
-                        {currentMintBalanceDetails.balance}
-                        {currentMintBalanceDetails.metadata?.symbol
-                          ? ` ${currentMintBalanceDetails.metadata.symbol}`
-                          : ""}
-                      </Text>
-                    </Flex>
-                  )}
-
-                {currentMintError && (
-                  <HStack justifyContent="center" py={2} color="red.400">
-                    <Icon as={QuestionOutlineIcon} />
-                    <Text fontSize="sm">
-                      Error:{" "}
-                      {typeof currentMintError === "string"
-                        ? truncateAddress(currentMintError, 30)
-                        : "Could not fetch details."}
-                    </Text>
-                  </HStack>
-                )}
-
-                {!isLoadingCurrentMint &&
-                  !currentMintError &&
-                  !currentMintBalanceDetails && (
-                    <Text
-                      fontSize="sm"
-                      color="gray.500"
-                      textAlign="center"
-                      py={2}
-                    >
-                      No data for this mint. Try refreshing.
-                    </Text>
-                  )}
-              </VStack>
-            </Box>
-          )}
-
-        {/* Send and Receive cards - only if a current mint is selected and has balance data */}
-        {publicKey && currentMint && currentMintBalanceDetails && (
-          <Flex
-            gap={{ base: 5, md: 6 }}
-            direction={{ base: "column", md: "row" }}
-          >
-            {/* Receive Card */}
-            <Box sx={cardStyles} flex="1" bg={cardBackgroundColor}>
-              <VStack spacing={3} align="stretch">
-                <Heading
-                  as="h3"
-                  size="sm"
-                  display="flex"
-                  alignItems="center"
-                  color="whiteAlpha.900"
-                >
-                  <Icon
-                    as={ArrowForwardIcon}
-                    transform="rotate(-45deg)"
-                    color="green.400"
-                    mr={2}
-                    boxSize={5}
-                  />{" "}
-                  Receive Tokens
-                </Heading>
-                <Divider borderColor="whiteAlpha.200" />
-                <FormControl>
-                  <FormLabel
-                    htmlFor="walletAddress"
-                    fontWeight="medium"
-                    fontSize="xs"
-                    mb={1}
-                  >
-                    Your Wallet Address
-                  </FormLabel>
-                  <InputGroup size="sm">
-                    <Input
-                      id="walletAddress"
-                      value={publicKey?.toBase58()}
-                      isReadOnly
-                      fontSize="xs"
-                    />
-                    <InputRightElement>
-                      <IconButton
-                        aria-label="Copy address"
-                        icon={<CopyIcon />}
-                        size="sm"
-                        onClick={() =>
-                          handleCopy(
-                            publicKey?.toBase58(),
-                            "Wallet address copied!"
-                          )
-                        }
-                        variant="ghost"
-                        colorScheme="brand"
-                      />
-                    </InputRightElement>
-                  </InputGroup>
-                </FormControl>
-              </VStack>
-            </Box>
-
-            {/* Send Card */}
-            <Box sx={cardStyles} flex="1" bg={cardBackgroundColor}>
-              <VStack spacing={3} align="stretch">
-                <Heading
-                  as="h3"
-                  size="sm"
-                  display="flex"
-                  alignItems="center"
-                  color="whiteAlpha.900"
-                >
-                  <Icon
-                    as={ArrowForwardIcon}
-                    color="orange.400"
-                    mr={2}
-                    boxSize={5}
-                  />{" "}
-                  Send Tokens
-                </Heading>
-                <Divider borderColor="whiteAlpha.200" />
-                <FormControl mb={1}>
-                  <FormLabel
-                    htmlFor="recipientAddress"
-                    fontWeight="medium"
-                    fontSize="xs"
-                    mb={1}
-                  >
-                    Recipient Address
-                  </FormLabel>
-                  <Input
-                    id="recipientAddress"
-                    size="sm"
-                    placeholder="Enter recipient's Solana address"
-                    value={recipient}
-                    onChange={(e) => setRecipient(e.target.value)}
-                  />
-                </FormControl>
-                <FormControl mb={2}>
-                  <FormLabel
-                    htmlFor="sendAmount"
-                    fontWeight="medium"
-                    fontSize="xs"
-                    mb={1}
-                  >
-                    Amount
-                  </FormLabel>
-                  <Input
-                    id="sendAmount"
-                    size="sm"
-                    placeholder="Number of tokens to send"
-                    type="number"
-                    value={sendAmount}
-                    onChange={(e) => setSendAmount(e.target.value)}
-                  />
-                </FormControl>
-                <Button
-                  colorScheme="brand"
-                  onClick={handleSend}
-                  isLoading={sendLoading}
-                  loadingText="Sending..."
-                  isDisabled={
-                    !recipient ||
-                    !sendAmount ||
-                    !currentMint ||
-                    !currentMintBalanceDetails ||
-                    typeof currentMintBalanceDetails.balance !== "number" ||
-                    Number(sendAmount) <= 0 ||
-                    Number(sendAmount) > currentMintBalanceDetails.balance
-                  }
-                  leftIcon={<ArrowForwardIcon />}
-                  mt={2}
-                >
-                  Send Tokens
-                </Button>
-                {currentMintBalanceDetails &&
-                  Number(sendAmount) > currentMintBalanceDetails.balance && (
-                    <Text
-                      fontSize="xs"
-                      color="red.400"
-                      textAlign="center"
-                      mt={1}
-                    >
-                      Insufficient balance.
-                    </Text>
-                  )}
-              </VStack>
-            </Box>
-          </Flex>
-        )}
-      </VStack>
-    </Container>
-  );
-
-  // Education Hub Modal Content
-  const EducationHubModal = () => (
-    <Modal
-      isOpen={isEducationModalOpen}
-      onClose={() => setIsEducationModalOpen(false)}
-      size="xl"
-      scrollBehavior="inside"
-    >
-      <ModalOverlay bg="blackAlpha.700" backdropFilter="blur(5px)" />
-      <ModalContent
-        bg={cardBackgroundColor}
-        border="1px solid"
-        borderColor="cardBorder"
-        color="whiteAlpha.900"
-      >
-        <ModalHeader borderBottom="1px solid" borderColor="whiteAlpha.200">
-          <HStack>
-            <Icon as={InfoIcon} color={brandColor} boxSize={6} />
-            <Heading size="md">ZK Compressed Tokens Education Hub</Heading>
-          </HStack>
-        </ModalHeader>
-        <ModalCloseButton />
-        <ModalBody py={6}>
-          <VStack spacing={6} align="stretch">
-            <Box>
-              <Heading size="sm" mb={2} color={brandColor}>
-                What are ZK Compressed Tokens?
-              </Heading>
-              <Text fontSize="sm">
-                ZK (Zero-Knowledge) Compressed Tokens are a new type of digital
-                asset on Solana that leverages the power of zero-knowledge
-                proofs to significantly reduce the cost of minting and managing
-                tokens, especially Non-Fungible Tokens (NFTs). Instead of
-                storing all token data directly on-chain, compressed tokens
-                store a cryptographic summary (a Merkle tree root) on-chain,
-                while the actual data resides off-chain (typically on reliable
-                decentralized storage like Arweave, or retrievable via RPC nodes
-                that support the compression scheme).
-              </Text>
-            </Box>
-
-            <Divider borderColor="whiteAlpha.200" />
-
-            <Box>
-              <Heading size="sm" mb={3} color={brandColor}>
-                Key Benefits
-              </Heading>
-              <List spacing={3} fontSize="sm">
-                <ListItem>
-                  <ListIcon as={CheckCircleIcon} color="green.400" />
-                  <Text as="span" fontWeight="bold">
-                    Drastically Reduced Costs:
-                  </Text>{" "}
-                  Minting millions of compressed NFTs can cost a few SOL,
-                  compared to potentially thousands for traditional NFTs. This
-                  opens up new use cases for high-volume tokenization.
-                </ListItem>
-                <ListItem>
-                  <ListIcon as={CheckCircleIcon} color="green.400" />
-                  <Text as="span" fontWeight="bold">
-                    Scalability:
-                  </Text>{" "}
-                  Enables applications that require a massive number of unique
-                  tokens without overwhelming the Solana network or incurring
-                  prohibitive fees.
-                </ListItem>
-                <ListItem>
-                  <ListIcon as={CheckCircleIcon} color="green.400" />
-                  <Text as="span" fontWeight="bold">
-                    On-Chain Security:
-                  </Text>{" "}
-                  While data is stored off-chain, ownership and transfer
-                  validity are still enforced by on-chain logic and ZK proofs,
-                  maintaining Solana's security.
-                </ListItem>
-                <ListItem>
-                  <ListIcon as={CheckCircleIcon} color="green.400" />
-                  <Text as="span" fontWeight="bold">
-                    Composability:
-                  </Text>{" "}
-                  Designed to be compatible with the existing Solana ecosystem,
-                  allowing compressed tokens to be integrated into various
-                  dApps, marketplaces, and wallets (like this one!).
-                </ListItem>
-              </List>
-            </Box>
-
-            <Divider borderColor="whiteAlpha.200" />
-
-            <Box>
-              <Heading size="sm" mb={2} color={brandColor}>
-                How Do They Work (Simplified)?
-              </Heading>
-              <Text fontSize="sm" mb={2}>
-                1.{" "}
-                <Text as="span" fontWeight="bold">
-                  Merkle Trees:
-                </Text>{" "}
-                Token data is organized into a Merkle tree. Each token (or its
-                state) is a "leaf" in this tree. 2.{" "}
-                <Text as="span" fontWeight="bold">
-                  On-Chain Root:
-                </Text>{" "}
-                Only the "root hash" of this Merkle tree is stored on-chain in a
-                Solana account. 3.{" "}
-                <Text as="span" fontWeight="bold">
-                  Off-Chain Data:
-                </Text>{" "}
-                The actual token data and the tree structure are stored
-                off-chain. 4.{" "}
-                <Text as="span" fontWeight="bold">
-                  ZK Proofs for Operations:
-                </Text>{" "}
-                When a token is transferred or modified, the owner provides a ZK
-                proof. This proof mathematically demonstrates that they own the
-                specific token and that the operation is valid according to the
-                current Merkle tree root, without revealing unnecessary
-                information about other tokens. The on-chain program verifies
-                this proof and updates the on-chain root if the operation is
-                valid.
-              </Text>
-              <Text fontSize="xs" color="gray.400">
-                This wallet utilizes Light Protocol for its compressed token
-                operations, which implements these ZK compression techniques.
-              </Text>
-            </Box>
-
-            <Divider borderColor="whiteAlpha.200" />
-
-            <Box>
-              <Heading size="sm" mb={2} color={brandColor}>
-                Further Resources
-              </Heading>
-              <List spacing={2} fontSize="sm">
-                <ListItem>
-                  <Link
-                    href="https://lightprotocol.com/"
-                    isExternal
-                    color="brand.400"
-                    _hover={{ textDecoration: "underline" }}
-                  >
-                    Light Protocol Website{" "}
-                    <ArrowForwardIcon mx="2px" transform="translateY(-1px)" />
-                  </Link>
-                </ListItem>
-                <ListItem>
-                  <Link
-                    href="https://docs.lightprotocol.com/"
-                    isExternal
-                    color="brand.400"
-                    _hover={{ textDecoration: "underline" }}
-                  >
-                    Light Protocol Docs{" "}
-                    <ArrowForwardIcon mx="2px" transform="translateY(-1px)" />
-                  </Link>
-                </ListItem>
-                <ListItem>
-                  <Link
-                    href="https://solana.com/docs/advanced/state-compression"
-                    isExternal
-                    color="brand.400"
-                    _hover={{ textDecoration: "underline" }}
-                  >
-                    Solana State Compression Docs{" "}
-                    <ArrowForwardIcon mx="2px" transform="translateY(-1px)" />
-                  </Link>
-                </ListItem>
-              </List>
-            </Box>
-          </VStack>
-        </ModalBody>
-        <ModalFooter borderTop="1px solid" borderColor="whiteAlpha.200">
-          <Button
-            variant="outline"
-            onClick={() => setIsEducationModalOpen(false)}
-          >
-            Close
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
 
   return (
     <ChakraProvider theme={theme}>
@@ -1390,31 +629,7 @@ function App() {
         >
           <Container maxW="container.xl">
             <Flex align="center" justify="space-between" minH="50px">
-              <HStack spacing={2}>
-                {connected && (
-                  <Tooltip
-                    label="Disconnect & Go Home"
-                    placement="bottom"
-                    openDelay={300}
-                  >
-                    <IconButton
-                      icon={<ArrowBackIcon boxSize={5} />}
-                      aria-label="Disconnect and go back"
-                      variant="ghost"
-                      colorScheme="gray"
-                      onClick={disconnect}
-                      size="md"
-                      mr={1}
-                      sx={{
-                        color: "whiteAlpha.800",
-                        _hover: {
-                          color: "whiteAlpha.900",
-                          bg: "whiteAlpha.200",
-                        },
-                      }}
-                    />
-                  </Tooltip>
-                )}
+              <HStack spacing={3}>
                 <Box
                   bg="brand.500"
                   w="32px"
@@ -1438,7 +653,22 @@ function App() {
                   ZK Token Wallet
                 </Heading>
               </HStack>
-              <WalletMultiButton />
+              <HStack spacing={4}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onInfoOpen}
+                  colorScheme="brand"
+                  px={4}
+                  fontSize="sm"
+                  height="40px"
+                >
+                  Learn More
+                </Button>
+                <WalletMultiButton
+                  style={{ height: "40px", fontSize: "14px" }}
+                />
+              </HStack>
             </Flex>
           </Container>
         </Box>
@@ -1449,11 +679,440 @@ function App() {
           flex="1"
           direction="column"
           align="center"
-          justifyContent={!connected ? "center" : "flex-start"}
+          justifyContent="center"
           width="100%"
           py={{ base: 6, md: 10 }}
         >
-          {!connected ? landingPageContent : dashboardContent}
+          {!connected ? (
+            <Container
+              maxW={{ base: "container.sm", md: "container.md" }}
+              textAlign="center"
+            >
+              <VStack spacing={{ base: 6, md: 8 }} width="100%">
+                <Image
+                  src={solanaSvg}
+                  alt="Solana SVG Logo"
+                  boxSize={{ base: "100px", md: "120px" }}
+                  opacity={0.9}
+                  mb={4}
+                />
+                <Heading
+                  as="h2"
+                  fontSize={{ base: "2xl", sm: "3xl", md: "4xl" }}
+                  fontWeight="extrabold"
+                  lineHeight="1.2"
+                >
+                  Secure & Efficient Solana
+                  <br />
+                  <Text as="span" color={brandColor}>
+                    Compressed Token Management
+                  </Text>
+                </Heading>
+                <Text
+                  fontSize={{ base: "md", md: "lg" }}
+                  color={subtleText}
+                  maxW="lg"
+                >
+                  Leverage the power of ZK-compression. Connect your wallet to
+                  experience seamless and cost-effective token operations on
+                  Solana.
+                </Text>
+                <Box pt={4}>
+                  <Text fontSize="sm" color="gray.500">
+                    Please connect your wallet using the button in the header.
+                  </Text>
+                </Box>
+              </VStack>
+            </Container>
+          ) : (
+            <Container maxW="container.md" width="100%">
+              <VStack spacing={{ base: 5, md: 6 }} align="stretch" width="100%">
+                <Box sx={cardStyles} bg={cardBackgroundColor}>
+                  <VStack spacing={4} align="stretch">
+                    <Flex justifyContent="space-between" alignItems="center">
+                      <HStack>
+                        <IconButton
+                          icon={<ArrowBackIcon />}
+                          size="sm"
+                          aria-label="Disconnect wallet and go back"
+                          onClick={() =>
+                            disconnect().catch((err) =>
+                              console.error("Disconnect error", err)
+                            )
+                          }
+                          variant="ghost"
+                          mr={2}
+                          color="whiteAlpha.800"
+                        />
+                        <Tag size="sm" colorScheme="green" variant="solid">
+                          Connected
+                        </Tag>
+                        <Text fontWeight="medium" fontSize="sm">
+                          {publicKey?.toBase58().slice(0, 6)}...
+                          {publicKey?.toBase58().slice(-4)}
+                        </Text>
+                        <IconButton
+                          icon={<CopyIcon />}
+                          size="xs"
+                          aria-label="Copy Address"
+                          onClick={() =>
+                            handleCopy(
+                              publicKey?.toBase58(),
+                              "Wallet address copied!"
+                            )
+                          }
+                          variant="ghost"
+                        />
+                      </HStack>
+                      <Tag
+                        size="md"
+                        colorScheme="brand"
+                        variant="outline"
+                        fontWeight="bold"
+                      >
+                        {solBalance !== null ? (
+                          `${solBalance.toFixed(4)} SOL`
+                        ) : (
+                          <Spinner size="xs" />
+                        )}
+                      </Tag>
+                    </Flex>
+                    <Divider borderColor="whiteAlpha.200" />
+                    <FormControl>
+                      <FormLabel
+                        htmlFor="mintInput"
+                        fontWeight="semibold" // More prominent label
+                        fontSize="sm"
+                        mb={2} // More space
+                      >
+                        Manage & Check Compressed Token
+                      </FormLabel>
+                      <InputGroup size="sm">
+                        <Input
+                          id="mintInput"
+                          placeholder="Enter or paste new mint address"
+                          value={mintInput}
+                          onChange={(e) => setMintInput(e.target.value)}
+                          onKeyPress={(event) => {
+                            if (event.key === "Enter") {
+                              handleAddMint();
+                            }
+                          }}
+                        />
+                        <InputRightElement width="auto" pr={1}>
+                          <Button
+                            h="1.75rem"
+                            size="sm"
+                            colorScheme="brand"
+                            onClick={handleAddMint}
+                            isDisabled={!mintInput.trim()}
+                            mr={1}
+                          >
+                            Add Mint
+                          </Button>
+                          <Button
+                            h="1.75rem"
+                            size="sm"
+                            variant="outline"
+                            colorScheme="brand"
+                            onClick={fetchTokenData}
+                            isDisabled={
+                              !selectedMint || loading || isMetadataLoading
+                            }
+                            isLoading={loading || isMetadataLoading}
+                            loadingText="Fetching"
+                          >
+                            Check Selected
+                          </Button>
+                        </InputRightElement>
+                      </InputGroup>
+                    </FormControl>
+
+                    {savedMints.length > 0 && (
+                      <FormControl mt={4}>
+                        <FormLabel
+                          htmlFor="selectMint"
+                          fontWeight="semibold"
+                          fontSize="sm"
+                          mb={2}
+                        >
+                          Saved Mint Addresses
+                        </FormLabel>
+                        <HStack>
+                          <Select
+                            id="selectMint"
+                            size="sm"
+                            value={selectedMint}
+                            onChange={(e) => handleSelectMint(e.target.value)}
+                            placeholder="Select a saved mint"
+                          >
+                            {savedMints.map((m) => (
+                              <option
+                                key={m.address}
+                                value={m.address}
+                                style={{
+                                  backgroundColor: "#2D3748",
+                                  color: "white",
+                                }}
+                              >
+                                {m.name ||
+                                  `${m.address.slice(
+                                    0,
+                                    10
+                                  )}...${m.address.slice(-6)}`}
+                              </option>
+                            ))}
+                          </Select>
+                          {selectedMint && (
+                            <IconButton
+                              icon={<CloseIcon />}
+                              size="sm"
+                              aria-label="Remove selected mint from saved list"
+                              onClick={() => handleRemoveMint(selectedMint)}
+                              variant="ghost"
+                              colorScheme="red"
+                              isDisabled={
+                                !savedMints.some(
+                                  (m) => m.address === selectedMint
+                                )
+                              }
+                            />
+                          )}
+                        </HStack>
+                      </FormControl>
+                    )}
+
+                    {compressedBalance !== null && (
+                      <Box
+                        mt={1}
+                        p={3}
+                        bg="blackAlpha.200"
+                        borderRadius="md"
+                        border="1px solid"
+                        borderColor="whiteAlpha.100"
+                      >
+                        <Flex
+                          justifyContent="space-between"
+                          alignItems="center"
+                        >
+                          <Text fontWeight="semibold" fontSize="md">
+                            {" "}
+                            {/* Increased weight and size */}
+                            Your Token Balance:
+                          </Text>
+                          <Text
+                            fontSize="xl" // Larger balance display
+                            fontWeight="bold"
+                            color={brandColor}
+                          >
+                            {compressedBalance}
+                          </Text>
+                        </Flex>
+                      </Box>
+                    )}
+
+                    {isMetadataLoading && (
+                      <Spinner size="md" alignSelf="center" my={3} />
+                    )}
+                    {!isMetadataLoading && tokenMetadata && (
+                      <Box mt={3} p={3} bg="blackAlpha.300" borderRadius="md">
+                        <HStack spacing={4} align="flex-start">
+                          {tokenMetadata.image && (
+                            <Image
+                              src={tokenMetadata.image}
+                              alt={`${tokenMetadata.name} image`}
+                              boxSize={{ base: "60px", md: "80px" }} // Slightly larger image
+                              borderRadius="lg" // Consistent rounding
+                              objectFit="cover"
+                              border="1px solid"
+                              borderColor="whiteAlpha.300"
+                            />
+                          )}
+                          <VStack align="flex-start" spacing={1}>
+                            <Heading
+                              size={{ base: "sm", md: "md" }}
+                              color={brandColor}
+                              display="flex"
+                              alignItems="center"
+                            >
+                              {" "}
+                              {/* Larger heading */}
+                              {tokenMetadata.name || "Unnamed Token"}
+                              {tokenMetadata.symbol && (
+                                <Tag
+                                  size="sm"
+                                  ml={2}
+                                  variant="outline"
+                                  colorScheme="gray"
+                                >
+                                  {" "}
+                                  {/* Subtle tag */}
+                                  {tokenMetadata.symbol}
+                                </Tag>
+                              )}
+                            </Heading>
+                            {tokenMetadata.description && (
+                              <Text
+                                fontSize={{ base: "xs", md: "sm" }} // Slightly larger description
+                                color="gray.300" // Brighter for readability
+                              >
+                                {tokenMetadata.description}
+                              </Text>
+                            )}
+                          </VStack>
+                        </HStack>
+                      </Box>
+                    )}
+                  </VStack>
+                </Box>
+
+                <Flex
+                  gap={{ base: 5, md: 6 }}
+                  direction={{ base: "column", md: "row" }}
+                >
+                  <Box sx={cardStyles} flex="1" bg={cardBackgroundColor}>
+                    <VStack spacing={3} align="stretch">
+                      <Heading
+                        as="h3"
+                        size="md" // Increase card title size
+                        display="flex"
+                        alignItems="center"
+                        color="whiteAlpha.900"
+                      >
+                        <Icon
+                          as={ArrowForwardIcon}
+                          transform="rotate(-45deg)"
+                          color="green.400"
+                          mr={2}
+                          boxSize={5}
+                        />
+                        Receive Tokens
+                      </Heading>
+                      <Divider borderColor="whiteAlpha.200" />
+                      <FormControl>
+                        <FormLabel
+                          htmlFor="walletAddress"
+                          fontWeight="medium"
+                          fontSize="xs"
+                          mb={1}
+                        >
+                          Your Wallet Address
+                        </FormLabel>
+                        <InputGroup size="sm">
+                          <Input
+                            id="walletAddress"
+                            value={publicKey?.toBase58()}
+                            isReadOnly
+                            fontSize="xs"
+                          />
+                          <InputRightElement>
+                            <IconButton
+                              aria-label="Copy address"
+                              icon={<CopyIcon />}
+                              size="sm"
+                              onClick={() =>
+                                handleCopy(
+                                  publicKey?.toBase58(),
+                                  "Wallet address copied!"
+                                )
+                              }
+                              variant="ghost"
+                              colorScheme="brand"
+                            />
+                          </InputRightElement>
+                        </InputGroup>
+                      </FormControl>
+                    </VStack>
+                  </Box>
+
+                  <Box sx={cardStyles} flex="1" bg={cardBackgroundColor}>
+                    <VStack spacing={3} align="stretch">
+                      <Heading
+                        as="h3"
+                        size="md" // Increase card title size
+                        display="flex"
+                        alignItems="center"
+                        color="whiteAlpha.900"
+                      >
+                        <Icon
+                          as={ArrowForwardIcon}
+                          color="orange.400"
+                          mr={2}
+                          boxSize={5}
+                        />
+                        Send Tokens
+                      </Heading>
+                      <Divider borderColor="whiteAlpha.200" />
+                      <FormControl mb={1}>
+                        <FormLabel
+                          htmlFor="recipientAddress"
+                          fontWeight="medium"
+                          fontSize="xs"
+                          mb={1}
+                        >
+                          Recipient Address
+                        </FormLabel>
+                        <Input
+                          id="recipientAddress"
+                          size="sm"
+                          placeholder="Enter recipient's Solana address"
+                          value={recipient}
+                          onChange={(e) => setRecipient(e.target.value)}
+                        />
+                      </FormControl>
+                      <FormControl mb={2}>
+                        <FormLabel
+                          htmlFor="sendAmount"
+                          fontWeight="medium"
+                          fontSize="xs"
+                          mb={1}
+                        >
+                          Amount
+                        </FormLabel>
+                        <Input
+                          id="sendAmount"
+                          size="sm"
+                          placeholder="Number of tokens to send"
+                          type="number"
+                          value={sendAmount}
+                          onChange={(e) => setSendAmount(e.target.value)}
+                        />
+                      </FormControl>
+                      <Button
+                        colorScheme="brand"
+                        onClick={handleSend}
+                        isLoading={sendLoading}
+                        loadingText="Sending..."
+                        isDisabled={
+                          !recipient ||
+                          !sendAmount ||
+                          !selectedMint ||
+                          compressedBalance === 0 ||
+                          (compressedBalance !== null &&
+                            Number(sendAmount) > compressedBalance)
+                        }
+                        leftIcon={<ArrowForwardIcon />}
+                        mt={2}
+                      >
+                        Send Tokens
+                      </Button>
+                      {compressedBalance !== null &&
+                        Number(sendAmount) > compressedBalance && (
+                          <Text
+                            fontSize="xs"
+                            color="red.400"
+                            textAlign="center"
+                            mt={1}
+                          >
+                            Insufficient balance.
+                          </Text>
+                        )}
+                    </VStack>
+                  </Box>
+                </Flex>
+              </VStack>
+            </Container>
+          )}
         </Flex>
 
         {/* Global Footer */}
@@ -1465,24 +1124,175 @@ function App() {
           borderTop="1px solid"
           borderColor="whiteAlpha.100"
         >
-          <HStack justifyContent="center" alignItems="center" spacing={4}>
-            <Text fontSize="xs" color="gray.500">
-              ZK Compressed Token Wallet © {new Date().getFullYear()} • Powered
-              by Light Protocol
-            </Text>
-            <Button
-              size="xs"
-              variant="link"
-              color="brand.400"
-              onClick={() => setIsEducationModalOpen(true)}
-              leftIcon={<InfoIcon />}
-            >
-              Learn More
-            </Button>
-          </HStack>
+          <Text fontSize="xs" color="gray.500">
+            ZK Compressed Token Wallet © {new Date().getFullYear()} • Powered by
+            Light Protocol
+          </Text>
         </Box>
-        <EducationHubModal />
       </Box>
+
+      {/* Education Hub Modal */}
+      <Modal
+        isOpen={isInfoOpen}
+        onClose={onInfoClose}
+        size="2xl"
+        scrollBehavior="inside"
+      >
+        <ModalOverlay bg="blackAlpha.700" backdropFilter="blur(5px)" />{" "}
+        {/* Stronger blur */}
+        <ModalContent
+          bg={cardBackgroundColor}
+          backdropFilter="blur(10px)"
+          borderWidth="1px"
+          borderColor="whiteAlpha.200"
+          borderRadius="xl"
+        >
+          <ModalHeader
+            borderBottomWidth="1px"
+            borderColor="whiteAlpha.300"
+            fontSize="xl"
+            fontWeight="semibold"
+          >
+            {" "}
+            {/* Header styling */}
+            About ZK Compressed Tokens & This Wallet
+          </ModalHeader>
+          <ModalCloseButton />
+          <ModalBody py={6} px={{ base: 4, md: 6 }}>
+            <VStack spacing={5} align="stretch">
+              <Heading size="lg" fontWeight="bold" color={brandColor}>
+                Understanding ZK State Compression
+              </Heading>{" "}
+              {/* Modal Title */}
+              <Text fontSize="md" lineHeight="tall">
+                {" "}
+                {/* Increased font size and line height */}
+                Solana's state growth presents challenges for on-chain storage
+                costs. State compression, leveraging technologies like Merkle
+                trees and off-chain data storage (e.g., via IPFS or Arweave), is
+                a powerful solution. By storing only a cryptographic root hash
+                on-chain, the cost of minting and managing vast quantities of
+                tokens or NFTs is dramatically reduced. Light Protocol is at the
+                forefront of enabling these capabilities.
+              </Text>
+              <Divider borderColor="whiteAlpha.300" />
+              <Heading size="md" fontWeight="semibold">
+                Core Concepts (Simplified)
+              </Heading>{" "}
+              {/* Section Heading */}
+              <List spacing={3} fontSize="md" pl={2}>
+                {" "}
+                {/* Increased font size and spacing */}
+                <ListItem display="flex" alignItems="center">
+                  <Icon
+                    as={CheckCircleIcon}
+                    color="green.400"
+                    mr={3}
+                    boxSize={5}
+                  />
+                  Token data (e.g., NFT metadata) resides off-chain for
+                  cost-efficiency.
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Icon
+                    as={CheckCircleIcon}
+                    color="green.400"
+                    mr={3}
+                    boxSize={5}
+                  />
+                  A Merkle tree is constructed from this off-chain data.
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Icon
+                    as={CheckCircleIcon}
+                    color="green.400"
+                    mr={3}
+                    boxSize={5}
+                  />
+                  The tree's unique root hash is securely stored on the Solana
+                  blockchain.
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Icon
+                    as={CheckCircleIcon}
+                    color="green.400"
+                    mr={3}
+                    boxSize={5}
+                  />
+                  Transactions (like transfers) are verified using Merkle
+                  proofs, cryptographically linking the specific token to the
+                  on-chain root.
+                </ListItem>
+              </List>
+              <Divider borderColor="whiteAlpha.300" />
+              <Heading size="md" fontWeight="semibold">
+                Key Benefits
+              </Heading>
+              <Text fontSize="md" lineHeight="tall">
+                <Text as="span" fontWeight="semibold">
+                  - Massive Cost Reduction:
+                </Text>{" "}
+                Minting millions of tokens/NFTs becomes feasible.
+                <br />
+                <Text as="span" fontWeight="semibold">
+                  - Enhanced Scalability:
+                </Text>{" "}
+                Supports Solana's growth in digital asset management.
+                <br />
+                <Text as="span" fontWeight="semibold">
+                  - On-Chain Efficiency:
+                </Text>{" "}
+                Minimizes the blockchain footprint for token operations.
+              </Text>
+              <Divider borderColor="whiteAlpha.300" />
+              <Heading size="md" fontWeight="semibold">
+                Using This ZK Token Wallet
+              </Heading>
+              <List spacing={3} fontSize="md" pl={2}>
+                <ListItem display="flex" alignItems="center">
+                  <Text as="span" fontWeight="bold" mr={2} color={brandColor}>
+                    1.
+                  </Text>{" "}
+                  Connect your Solana wallet (top-right).
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Text as="span" fontWeight="bold" mr={2} color={brandColor}>
+                    2.
+                  </Text>{" "}
+                  Input a compressed token's mint address and click "Add Mint".
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Text as="span" fontWeight="bold" mr={2} color={brandColor}>
+                    3.
+                  </Text>{" "}
+                  Select a mint from your saved list (if available).
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Text as="span" fontWeight="bold" mr={2} color={brandColor}>
+                    4.
+                  </Text>{" "}
+                  Click "Check Selected" to view balance and metadata.
+                </ListItem>
+                <ListItem display="flex" alignItems="center">
+                  <Text as="span" fontWeight="bold" mr={2} color={brandColor}>
+                    5.
+                  </Text>{" "}
+                  Use the "Send Tokens" section for transfers.
+                </ListItem>
+              </List>
+              <Text fontSize="sm" color="gray.400" mt={4} textAlign="center">
+                This wallet utilizes Light Protocol. Always exercise caution
+                when interacting with decentralized applications.
+              </Text>
+            </VStack>
+          </ModalBody>
+          <ModalFooter borderTopWidth="1px" borderColor="whiteAlpha.200">
+            <Button colorScheme="brand" onClick={onInfoClose}>
+              Close
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </ChakraProvider>
   );
 }

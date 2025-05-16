@@ -1,3 +1,4 @@
+/* Modern App styling for Wallet UI */
 body {
   margin: 0;
   padding: 0;
@@ -7,6 +8,7 @@ body {
   color: #fff !important;
 }
 
+/* Add styling for Solana wallet adapter button */
 .wallet-adapter-button {
   background-color: rgba(45, 45, 45, 0.75) !important;
   border: 1px solid rgba(255, 191, 0, 0.4) !important;
@@ -32,6 +34,7 @@ body {
   border-radius: 12px;
 }
 
+/* Optional: Style for the modal list items (wallets) */
 .wallet-adapter-modal-list li button {
   transition: background-color 0.2s ease-in-out !important;
 }
@@ -40,6 +43,7 @@ body {
   background-color: rgba(255, 191, 0, 0.1) !important;
 }
 
+/* Animation for loading states */
 @keyframes pulse {
   0% {
     opacity: 0.7;

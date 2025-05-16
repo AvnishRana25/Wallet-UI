@@ -1,45 +1,22 @@
-# ZK Token Wallet: Solana Compressed Token Management
+# Solana Compressed Token Wallet UI
 
-A modern, feature-rich web interface for managing Solana Compressed Tokens, built with a focus on user experience and leveraging the power of ZK (Zero-Knowledge) compression via Light Protocol.
+A modern web wallet for Solana Compressed Tokens. Connect your wallet, view your compressed token balance, and send/receive tokens with a beautiful UI.
 
-This wallet allows users to connect their existing Solana wallets, track multiple compressed token mints (both NFTs and fungible-like tokens), view balances and metadata, send tokens, and learn about the underlying technology.
+## Features
 
-## Key Features
-
-- **Wallet Integration:** Connect seamlessly with popular Solana wallets like Phantom, Solflare, and others supported by Wallet Adapter.
-- **Multi-Mint Management:** Track a list of your favorite compressed token mints or specific asset IDs.
-- **Balance & Metadata Display:** View balances for all tracked tokens. For NFTs and recognized tokens, metadata such as name and symbol is displayed.
-- **Send Compressed Tokens:** Securely send your compressed tokens to other Solana addresses.
-- **Education Hub:** In-app modal to learn about ZK compressed tokens, their benefits, and how they work.
-- **Modern & Responsive UI:** Built with Chakra UI for a clean, accessible, and responsive experience on all devices.
-- **Easy Navigation:** Includes a disconnect button to easily return to the home screen.
-
-## Tech Stack
-
-- React
-- Vite
-- Chakra UI
-- Solana Wallet Adapter
-- Solana Web3.js
-- Light Protocol SDK (@lightprotocol/stateless.js, @lightprotocol/compressed-token)
+- Connect with Phantom, Solflare, and more
+- View compressed token balance
+- Send/receive compressed tokens
+- Modern, responsive UI (Chakra UI)
 
 ## Getting Started
 
-1.  **Navigate to the `wallet-ui` directory (if you are in the project root):**
-    ```bash
-    cd wallet-ui
-    ```
-2.  **Install dependencies:**
-    Make sure you have Node.js and npm installed.
-    ```bash
-    npm install
-    ```
-3.  **Run the development server:**
-    ```bash
-    npm run dev
-    ```
-    The application should now be running on your local development server (typically `http://localhost:5173`).
+```bash
+npm install react@18.2.0 react-dom@18.2.0
+npm install
+npm run dev
+```
 
 ---
 
-This project aims to provide a comprehensive and user-friendly tool for interacting with the growing ecosystem of compressed tokens on Solana.
+Built with React, Vite, Chakra UI, and Solana Wallet Adapter.
